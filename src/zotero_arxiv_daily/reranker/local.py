@@ -19,7 +19,10 @@ class LocalReranker(BaseReranker):
             logging.getLogger("huggingface_hub.utils._http").setLevel(logging.ERROR)
             warnings.filterwarnings("ignore", category=FutureWarning)
 
-        encoder = SentenceTransformer(self.config.reranker.local.model, trust_remote_code=True)
+        import torch
+        # Models shipped in bfloat16 run emulated (very slowly) on most CPUs; float32 gives the same embeddings ~5x faster.
+        model_kwargs = {} if torch.cuda.is_available() else {"dtype": torch.float32}
+        encoder = SentenceTransformer(self.config.reranker.local.model, trust_remote_code=True, model_kwargs=model_kwargs)
         if self.config.reranker.local.encode_kwargs:
             encode_kwargs = self.config.reranker.local.encode_kwargs
         else:
