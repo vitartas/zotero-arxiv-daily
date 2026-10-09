@@ -3,7 +3,6 @@ from omegaconf import DictConfig
 from ..protocol import Paper, RawPaperItem
 from tqdm import tqdm
 from typing import Type
-from time import sleep
 from loguru import logger
 
 
@@ -21,6 +20,11 @@ class BaseRetriever(ABC):
     def convert_to_paper(self, raw_paper:RawPaperItem) -> Paper | None:
         pass
 
+    def fetch_full_text(self, paper:Paper) -> None:
+        """Fill in paper.full_text. Called after reranking, only for the papers that make it into the email.
+        Sources whose full text cannot be scraped leave it as is."""
+        pass
+
     def retrieve_papers(self) -> list[Paper]:
         raw_papers = self._retrieve_raw_papers()
         logger.info("Processing papers...")
@@ -33,7 +37,6 @@ class BaseRetriever(ABC):
                 continue
             if paper is not None:
                 papers.append(paper)
-            sleep(1)
         return papers
 
 registered_retrievers = {}

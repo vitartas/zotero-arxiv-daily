@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+from omegaconf import OmegaConf
 
 from zotero_arxiv_daily.reranker.base import BaseReranker, get_reranker_cls
 from tests.canned_responses import make_sample_paper, make_sample_corpus
@@ -10,8 +11,8 @@ from tests.canned_responses import make_sample_paper, make_sample_corpus
 class StubReranker(BaseReranker):
     """Reranker with a controlled similarity matrix for deterministic tests."""
 
-    def __init__(self, sim_matrix: np.ndarray):
-        self.config = None
+    def __init__(self, sim_matrix: np.ndarray, time_decay: bool = True):
+        self.config = OmegaConf.create({"reranker": {"time_decay": time_decay}})
         self._sim = sim_matrix
 
     def get_similarity_score(self, s1, s2):
@@ -53,6 +54,18 @@ def test_rerank_time_decay_weighting():
 
     # Newest corpus paper gets higher time-decay weight, so score should be higher
     assert score_new > score_old
+
+
+def test_rerank_without_time_decay_weights_corpus_equally():
+    corpus = make_sample_corpus(3)
+
+    # Only similar to the oldest paper vs. only similar to the newest paper
+    score_old = StubReranker(np.array([[0.0, 0.0, 1.0]]), time_decay=False).rerank([make_sample_paper()], corpus)[0].score
+    score_new = StubReranker(np.array([[1.0, 0.0, 0.0]]), time_decay=False).rerank([make_sample_paper()], corpus)[0].score
+
+    assert score_new == pytest.approx(score_old)
+    # Plain mean similarity, scaled by 10
+    assert score_old == pytest.approx(10 / 3)
 
 
 def test_rerank_single_candidate_single_corpus():

@@ -8,7 +8,6 @@ from tests.canned_responses import SAMPLE_BIORXIV_API_RESPONSE
 
 
 def test_biorxiv_retrieve(config, mock_biorxiv_api, monkeypatch):
-    monkeypatch.setattr("zotero_arxiv_daily.retriever.base.sleep", lambda _: None)
     with open_dict(config.source):
         config.source.biorxiv = {"category": ["bioinformatics"]}
     retriever = BiorxivRetriever(config)
@@ -30,7 +29,6 @@ def test_biorxiv_empty_response(config, monkeypatch):
         return resp
 
     monkeypatch.setattr(requests, "get", _patched)
-    monkeypatch.setattr("zotero_arxiv_daily.retriever.base.sleep", lambda _: None)
 
     with open_dict(config.source):
         config.source.biorxiv = {"category": ["bioinformatics"]}

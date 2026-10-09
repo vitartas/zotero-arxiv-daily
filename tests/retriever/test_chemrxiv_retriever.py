@@ -50,9 +50,11 @@ def _patch_pages(monkeypatch, pages):
     return calls
 
 
-def _configure(config, include_new_versions=False):
+def _configure(config, include_new_versions=False, lookback_hours=None):
     with open_dict(config.source):
         config.source.chemrxiv = {"include_new_versions": include_new_versions}
+        if lookback_hours is not None:
+            config.source.chemrxiv.lookback_hours = lookback_hours
     return ChemrxivRetriever(config)
 
 
@@ -61,7 +63,6 @@ def test_chemrxiv_is_registered():
 
 
 def test_chemrxiv_retrieve_filters_by_date_and_version(config, monkeypatch, fixed_now):
-    monkeypatch.setattr("zotero_arxiv_daily.retriever.base.sleep", lambda _: None)
     calls = _patch_pages(monkeypatch, [SAMPLE_CHEMRXIV_API_RESPONSE])
     retriever = _configure(config)
     papers = retriever.retrieve_papers()
@@ -73,8 +74,16 @@ def test_chemrxiv_retrieve_filters_by_date_and_version(config, monkeypatch, fixe
     assert calls[0]["filter"] == "type:posted-content,from-created-date:2026-03-01"
 
 
+def test_chemrxiv_lookback_hours_from_config(config, monkeypatch, fixed_now):
+    calls = _patch_pages(monkeypatch, [SAMPLE_CHEMRXIV_API_RESPONSE])
+    retriever = _configure(config, lookback_hours=11 * 24)
+    papers = retriever.retrieve_papers()
+    # The 11-day window reaches back to 2026-02-19 12:00 and so includes the paper from 2026-02-20.
+    assert calls[0]["filter"] == "type:posted-content,from-created-date:2026-02-19"
+    assert [p.title for p in papers] == ["A chemrxiv paper", "Another chemrxiv paper", "Old chemrxiv paper"]
+
+
 def test_chemrxiv_include_new_versions(config, monkeypatch, fixed_now):
-    monkeypatch.setattr("zotero_arxiv_daily.retriever.base.sleep", lambda _: None)
     _patch_pages(monkeypatch, [SAMPLE_CHEMRXIV_API_RESPONSE])
     retriever = _configure(config, include_new_versions=True)
     papers = retriever.retrieve_papers()
@@ -113,7 +122,6 @@ def test_chemrxiv_stops_on_short_page(config, monkeypatch, fixed_now):
 
 
 def test_chemrxiv_empty_response(config, monkeypatch, fixed_now):
-    monkeypatch.setattr("zotero_arxiv_daily.retriever.base.sleep", lambda _: None)
     _patch_pages(monkeypatch, [_chemrxiv_response([])])
     retriever = _configure(config)
     assert retriever.retrieve_papers() == []

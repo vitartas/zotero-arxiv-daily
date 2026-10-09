@@ -6,11 +6,67 @@ import tiktoken
 from openai import OpenAI
 from loguru import logger
 import json
+import os
+import subprocess
+from tempfile import TemporaryDirectory
 RawPaperItem = TypeVar('RawPaperItem')
 
 
-def _request_llm(openai_client: OpenAI, llm_params: dict, messages: list[dict]) -> str:
+def _request_claude_code(llm_params: dict, messages: list[dict]) -> str:
+    """Query Claude through the Claude Code CLI (`claude -p`), billed to the logged-in Claude subscription.
+
+    Locally this uses the existing `claude` login; in CI it uses CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`).
+    """
+    cc_params = llm_params.get("claude_code") or {}
+    model = (llm_params.get("generation_kwargs") or {}).get("model")
+    system_prompt = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
+    user_prompt = "\n\n".join(m["content"] for m in messages if m["role"] != "system")
+
+    cmd = [
+        cc_params.get("cli_path") or "claude", "-p",
+        "--output-format", "json",
+        "--tools", "",
+        "--no-session-persistence",
+        "--strict-mcp-config",
+        "--safe-mode",
+    ]
+    if model:
+        cmd += ["--model", model]
+    if system_prompt:
+        cmd += ["--system-prompt", system_prompt]
+    if cc_params.get("fallback_model"):
+        cmd += ["--fallback-model", cc_params["fallback_model"]]
+    if cc_params.get("effort"):
+        cmd += ["--effort", cc_params["effort"]]
+
+    # An API key would take precedence over the subscription login, so never pass one on.
+    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    # Run outside the repo so no project CLAUDE.md or settings get loaded into the context.
+    with TemporaryDirectory() as cwd:
+        proc = subprocess.run(
+            cmd,
+            input=user_prompt,
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=cwd,
+            timeout=cc_params.get("timeout") or 600,
+        )
+    try:
+        output = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        raise RuntimeError(f"claude exited with code {proc.returncode}: {(proc.stderr or proc.stdout).strip()}")
+    if proc.returncode != 0 or output.get("is_error"):
+        raise RuntimeError(f"claude returned an error: {output.get('result') or proc.stderr.strip()}")
+    return output["result"]
+
+
+def _request_llm(openai_client: OpenAI | None, llm_params: dict, messages: list[dict]) -> str:
     api_mode = llm_params.get("api_mode", "chat_completion")
+
+    if api_mode == "claude_code":
+        return _request_claude_code(llm_params, messages)
+
     generation_kwargs = dict(llm_params.get("generation_kwargs", {}))
 
     if api_mode == "chat_completion":
@@ -32,7 +88,7 @@ def _request_llm(openai_client: OpenAI, llm_params: dict, messages: list[dict]) 
 
     raise ValueError(
         f"Unsupported llm.api_mode: {api_mode}. "
-        "Expected 'chat_completion' or 'response'."
+        "Expected 'chat_completion', 'response' or 'claude_code'."
     )
 
 

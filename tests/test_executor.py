@@ -196,8 +196,8 @@ def test_run_end_to_end(config, monkeypatch):
     sent = []
     monkeypatch.setattr(smtplib, "SMTP", make_stub_smtp(sent))
 
-    # 5. Stub sleep (reranker/retriever)
-    monkeypatch.setattr("zotero_arxiv_daily.retriever.base.sleep", lambda _: None)
+    # 5. Stub full-text download of the top papers
+    monkeypatch.setattr(registered_retrievers["arxiv"], "fetch_full_text", lambda self, paper: None)
 
     # 6. Run
     executor = Executor(config)
@@ -207,6 +207,67 @@ def test_run_end_to_end(config, monkeypatch):
     assert len(sent) == 1, "Email should have been sent"
     _, _, email_body = sent[0]
     assert "text/html" in email_body
+
+
+def test_run_end_to_end_claude_code(config, monkeypatch):
+    """claude_code mode: no OpenAI client for the LLM, llm.api can stay unset, and only the top papers get full text."""
+    import smtplib
+
+    from omegaconf import open_dict
+
+    from tests.canned_responses import (
+        make_sample_paper,
+        make_stub_openai_client,
+        make_stub_smtp,
+        make_stub_zotero_client,
+    )
+
+    with open_dict(config):
+        config.executor.source = ["arxiv"]
+        config.executor.reranker = "api"
+        config.executor.max_paper_num = 2
+        config.llm.api_mode = "claude_code"
+        config.llm.api.key = "???"
+        config.llm.api.base_url = "???"
+
+    stub_zot = make_stub_zotero_client()
+    monkeypatch.setattr("zotero_arxiv_daily.executor.zotero.Zotero", lambda *a, **kw: stub_zot)
+
+    def _no_openai(**kw):
+        raise AssertionError("No OpenAI client should be created for the LLM in claude_code mode")
+
+    monkeypatch.setattr("zotero_arxiv_daily.executor.OpenAI", _no_openai)
+    stub_client = make_stub_openai_client()
+    monkeypatch.setattr("zotero_arxiv_daily.reranker.api.OpenAI", lambda **kw: stub_client)
+    monkeypatch.setattr("zotero_arxiv_daily.protocol._request_claude_code", lambda llm_params, messages: "Claude TLDR.")
+
+    retrieved = [make_sample_paper(title=f"E2E Paper {i}", full_text=None) for i in range(3)]
+
+    import zotero_arxiv_daily.retriever.arxiv_retriever  # noqa: F401
+
+    from zotero_arxiv_daily.retriever.base import registered_retrievers
+
+    monkeypatch.setattr(registered_retrievers["arxiv"], "retrieve_papers", lambda self: retrieved)
+    fetched = []
+
+    def _fetch_full_text(self, paper):
+        fetched.append(paper.title)
+        paper.full_text = "Full text."
+
+    monkeypatch.setattr(registered_retrievers["arxiv"], "fetch_full_text", _fetch_full_text)
+
+    sent = []
+    monkeypatch.setattr(smtplib, "SMTP", make_stub_smtp(sent))
+
+    executor = Executor(config)
+    assert executor.openai_client is None
+    executor.run()
+
+    summarised = [p.title for p in retrieved if p.tldr is not None]
+    assert len(fetched) == 2
+    assert sorted(fetched) == sorted(summarised)
+    assert all(p.tldr == "Claude TLDR." for p in retrieved if p.tldr is not None)
+    assert len(sent) == 1, "Email should have been sent"
 
 
 def test_run_no_papers_send_empty_false(config, monkeypatch):
@@ -237,7 +298,6 @@ def test_run_no_papers_send_empty_false(config, monkeypatch):
 
     sent = []
     monkeypatch.setattr(smtplib, "SMTP", make_stub_smtp(sent))
-    monkeypatch.setattr("zotero_arxiv_daily.retriever.base.sleep", lambda _: None)
 
     executor = Executor(config)
     executor.run()
@@ -273,7 +333,6 @@ def test_run_no_papers_send_empty_true(config, monkeypatch):
 
     sent = []
     monkeypatch.setattr(smtplib, "SMTP", make_stub_smtp(sent))
-    monkeypatch.setattr("zotero_arxiv_daily.retriever.base.sleep", lambda _: None)
 
     executor = Executor(config)
     executor.run()

@@ -118,11 +118,14 @@ source:
   arxiv:
     category: null # The categories of target arxiv papers. Find the abbr of your research area from [here](https://arxiv.org/category_taxonomy). Example: ["cs.AI","cs.CV","cs.LG","cs.CL"]
     include_cross_list: false # Whether to include arXiv cross-list papers in subscribed categories. Example: true
+    lookback_days: null # null: take the latest daily announcement from the RSS feed. N: query the arXiv API for papers first submitted in an N-day window instead (e.g. 7 for a weekly digest). Example: 7
+    lag_days: 2 # Only used with lookback_days. The window ends lag_days before the run date, so every paper in it has been announced already. 2 suits a weekly run on Saturday. Example: 2
   biorxiv:
     category: null # The categories of target biorxiv papers. Find categories from [here](https://www.biorxiv.org/). Example: ["biochemistry","animal behavior and cognition"]
   medrxiv:
     category: null # The categories of target medrxiv papers. Find categories from [here](https://www.medrxiv.org/) Example: ["psychiatry and clinical psychology", "neurology"]
   chemrxiv:
+    lookback_hours: 24 # Retrieve chemrxiv preprints posted within this many hours before the run. Example: 168
     include_new_versions: false # Whether to include revised versions (v2, v3, ...) of previously posted chemrxiv preprints in addition to new first postings. chemrxiv has no category filter: all new preprints (a few dozen per day) are retrieved via Crossref and left to the reranker. Example: true
 
 email:
@@ -131,19 +134,27 @@ email:
   smtp_server: ??? # The SMTP server that sends the email. Ask your email provider (Gmail, QQ, Outlook, ...) for its SMTP server. Example: smtp.qq.com
   smtp_port: ??? # The port of SMTP server. Example: 465
   sender_password: ??? # The password of the sender account. Note that it's not necessarily the password for logging in the e-mail client, but the authentication code for SMTP service. Ask your email provider for this. Example: abcdefghijklmn
+  subject: Daily arXiv # Subject of the email; the date is appended. Example: Weekly arXiv digest
 
 llm:
   api:
     key: ??? # API Key of your LLM API. Example: sk-xxx
     base_url: ??? # API URL of your LLM API. Example: https://api.openai.com/v1
-  api_mode: chat_completion # The LLM API to use. Options: chat_completion or response.
+  api_mode: chat_completion # The LLM API to use. Options: chat_completion, response, or claude_code (runs the Claude Code CLI on your Claude subscription; llm.api is then unused).
   generation_kwargs:
-  # Arguments for the selected LLM API.
+  # Arguments for the selected LLM API. With claude_code only model is used.
     max_tokens: 16384
-    model: ???
+    model: ??? # With claude_code, a Claude model alias or full name. Example: opus
+  claude_code:
+  # Options for api_mode claude_code.
+    cli_path: claude # Path to the claude executable. Example: claude
+    fallback_model: null # Model to fall back to if the main one is overloaded or unavailable. Example: sonnet
+    effort: null # Effort level passed to claude. Example: low
+    timeout: 600 # Timeout in seconds for one claude call. Example: 600
   language: English # Preferred language for the TL;DR. Example: English
 
 reranker:
+  time_decay: true # Whether to weight recently added Zotero papers higher. false weights all Zotero papers equally. Example: false
   local:
     model: jinaai/jina-embeddings-v5-text-nano # The Hugging Face model name of the local embedding model. Example: jinaai/jina-embeddings-v5-text-nano
     encode_kwargs:
@@ -163,6 +174,27 @@ executor:
   source: ??? # The sources of papers to retrieve. Example: ['arxiv','biorxiv','medrxiv','chemrxiv']
   reranker: local # The reranker to use. Example: 'local' or 'api'
 ```
+
+### Use your Claude subscription instead of an API key
+Set `llm.api_mode: claude_code` to generate TL;DRs and affiliations with the [Claude Code](https://docs.claude.com/en/docs/claude-code) CLI (`claude -p`), which counts against your Claude Pro/Max plan instead of API credits. `llm.api` can then be left unset.
+```yaml
+llm:
+  api_mode: claude_code
+  generation_kwargs:
+    model: opus # or sonnet, haiku
+  claude_code:
+    fallback_model: sonnet
+```
+Locally, the CLI uses your existing `claude` login. For GitHub Actions, run `claude setup-token` once and save the printed token as the repository secret `CLAUDE_CODE_OAUTH_TOKEN`; the workflows install the CLI and pass the token on. `ANTHROPIC_API_KEY` is never passed to the CLI, so it cannot silently switch to API billing.
+
+### Weekly digest
+The arXiv RSS feed only holds the latest daily announcement. For a weekly email, set `source.arxiv.lookback_days: 7` to query the arXiv API for papers first submitted in a 7-day window instead, set `source.chemrxiv.lookback_hours: 168`, and change the cron in `.github/workflows/main.yml` to run once a week (e.g. `'0 6 * * 6'` for Saturday). The window ends `lag_days` (default 2) before the run date, so every paper in it has been announced, and consecutive weekly windows join up without gaps. Full text is only downloaded for the `max_paper_num` papers that make it into the email, so a large weekly pool stays fast.
+
+### Gmail
+Use `smtp_server: smtp.gmail.com`, `smtp_port: 587`, and an [App Password](https://myaccount.google.com/apppasswords) (requires 2-Step Verification) as `SENDER_PASSWORD`.
+
+### Keep the config in the repository
+If the `CUSTOM_CONFIG` variable is not set, the workflows use the `config/custom.yaml` committed to your fork. It only references secrets through `${oc.env:...}`, so it is safe to commit.
 
 That's all! Now you can test the workflow by manually triggering it:
 ![test](./assets/test.png)

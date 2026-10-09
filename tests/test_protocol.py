@@ -154,3 +154,81 @@ def test_affiliations_error_returns_none(llm_params):
     result = paper.generate_affiliations(broken_client, llm_params)
     assert result is None
     assert paper.affiliations is None
+
+
+# ---------------------------------------------------------------------------
+# api_mode: claude_code (Claude Code CLI)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def claude_code_params():
+    return {
+        "api_mode": "claude_code",
+        "language": "English",
+        "generation_kwargs": {"model": "opus", "max_tokens": 16384},
+        "claude_code": {"cli_path": "claude", "fallback_model": "sonnet", "effort": None, "timeout": 600},
+    }
+
+
+def _stub_claude_run(calls, stdout=None, returncode=0, stderr=""):
+    """Return a subprocess.run replacement that records its calls and answers like `claude -p --output-format json`."""
+    import json
+    import subprocess
+
+    def _run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        if stdout is not None:
+            out = stdout
+        elif "affiliations" in kwargs["input"]:
+            out = json.dumps({"type": "result", "is_error": False, "result": '["TsingHua University","Peking University"]'})
+        else:
+            out = json.dumps({"type": "result", "is_error": False, "result": "Claude TLDR."})
+        return subprocess.CompletedProcess(cmd, returncode, stdout=out, stderr=stderr)
+
+    return _run
+
+
+def test_claude_code_tldr(claude_code_params, monkeypatch):
+    calls = []
+    monkeypatch.setattr("zotero_arxiv_daily.protocol.subprocess.run", _stub_claude_run(calls))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-should-not-be-used")
+    paper = make_sample_paper()
+
+    assert paper.generate_tldr(None, claude_code_params) == "Claude TLDR."
+
+    (cmd, kwargs), = calls
+    assert cmd[:2] == ["claude", "-p"]
+    assert cmd[cmd.index("--output-format") + 1] == "json"
+    assert cmd[cmd.index("--model") + 1] == "opus"
+    assert cmd[cmd.index("--fallback-model") + 1] == "sonnet"
+    assert cmd[cmd.index("--tools") + 1] == ""
+    assert "--effort" not in cmd
+    assert "summarizes scientific paper" in cmd[cmd.index("--system-prompt") + 1]
+    assert paper.title in kwargs["input"]
+    assert "ANTHROPIC_API_KEY" not in kwargs["env"]
+    assert kwargs["timeout"] == 600
+
+
+def test_claude_code_affiliations(claude_code_params, monkeypatch):
+    monkeypatch.setattr("zotero_arxiv_daily.protocol.subprocess.run", _stub_claude_run([]))
+    paper = make_sample_paper()
+    assert sorted(paper.generate_affiliations(None, claude_code_params)) == ["Peking University", "TsingHua University"]
+
+
+def test_claude_code_error_result_falls_back_to_abstract(claude_code_params, monkeypatch):
+    import json
+
+    error = json.dumps({"type": "result", "is_error": True, "result": "Claude usage limit reached"})
+    monkeypatch.setattr("zotero_arxiv_daily.protocol.subprocess.run", _stub_claude_run([], stdout=error, returncode=1))
+    paper = make_sample_paper()
+    assert paper.generate_tldr(None, claude_code_params) == paper.abstract
+
+
+def test_claude_code_non_json_output_falls_back_to_abstract(claude_code_params, monkeypatch):
+    monkeypatch.setattr(
+        "zotero_arxiv_daily.protocol.subprocess.run",
+        _stub_claude_run([], stdout="", returncode=1, stderr="Invalid API key"),
+    )
+    paper = make_sample_paper()
+    assert paper.generate_tldr(None, claude_code_params) == paper.abstract

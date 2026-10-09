@@ -23,7 +23,8 @@ class ChemrxivRetriever(BaseRetriever):
 
     chemRxiv publishes continuously rather than in daily batches, so this retriever
     keeps every record whose Crossref ``created`` timestamp (the deposit time, which
-    coincides with posting) falls within the last ``lookback_hours`` hours. Crossref
+    coincides with posting) falls within the last ``source.chemrxiv.lookback_hours``
+    hours (24 by default). Crossref
     does not expose chemRxiv subject categories, so there is no category filter;
     chemRxiv volume is small (a few dozen preprints per day) and the reranker does
     the selection.
@@ -32,7 +33,6 @@ class ChemrxivRetriever(BaseRetriever):
     api_url = "https://api.crossref.org/prefixes/10.26434/works"
     page_size = 100
     max_pages = 20
-    lookback_hours = 24
     request_headers = {
         "User-Agent": "zotero-arxiv-daily (https://github.com/TideDra/zotero-arxiv-daily)",
         "Accept": "application/json",
@@ -74,6 +74,10 @@ class ChemrxivRetriever(BaseRetriever):
     def _is_new_version(self, doi: str) -> bool:
         match = self._version_suffix.search(doi)
         return match is not None and int(match.group(1)) > 1
+
+    @property
+    def lookback_hours(self) -> int:
+        return self.retriever_config.get("lookback_hours", None) or 24
 
     def _retrieve_raw_papers(self) -> list[dict[str, Any]]:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=self.lookback_hours)

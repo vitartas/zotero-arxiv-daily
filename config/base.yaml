@@ -8,11 +8,14 @@ source:
   arxiv:
     category: null # The categories of target arxiv papers. Find the abbr of your research area from [here](https://arxiv.org/category_taxonomy). Example: ["cs.AI","cs.CV","cs.LG","cs.CL"]
     include_cross_list: false # Whether to include arXiv cross-list papers in subscribed categories. Example: true
+    lookback_days: null # null: take the latest daily announcement from the RSS feed. N: query the arXiv API for papers first submitted in an N-day window instead (e.g. 7 for a weekly digest). Example: 7
+    lag_days: 2 # Only used with lookback_days. The window ends lag_days before the run date, so every paper in it has been announced already. 2 suits a weekly run on Saturday. Example: 2
   biorxiv:
     category: null # The categories of target biorxiv papers. Find categories from [here](https://www.biorxiv.org/). Example: ["biochemistry","animal behavior and cognition"]
   medrxiv:
     category: null # The categories of target medrxiv papers. Find categories from [here](https://www.medrxiv.org/) Example: ["psychiatry and clinical psychology", "neurology"]
   chemrxiv:
+    lookback_hours: 24 # Retrieve chemrxiv preprints posted within this many hours before the run. Example: 168
     include_new_versions: false # Whether to include revised versions (v2, v3, ...) of previously posted chemrxiv preprints in addition to new first postings. chemrxiv has no category filter: all new preprints (a few dozen per day) are retrieved via Crossref and left to the reranker. Example: true
 
 email:
@@ -21,19 +24,27 @@ email:
   smtp_server: ??? # The SMTP server that sends the email. Ask your email provider (Gmail, QQ, Outlook, ...) for its SMTP server. Example: smtp.qq.com
   smtp_port: ??? # The port of SMTP server. Example: 465
   sender_password: ??? # The password of the sender account. Note that it's not necessarily the password for logging in the e-mail client, but the authentication code for SMTP service. Ask your email provider for this. Example: abcdefghijklmn
+  subject: Daily arXiv # Subject of the email; the date is appended. Example: Weekly arXiv digest
 
 llm:
   api:
     key: ??? # API Key of your LLM API. Example: sk-xxx
     base_url: ??? # API URL of your LLM API. Example: https://api.openai.com/v1
-  api_mode: chat_completion # The LLM API to use. Options: chat_completion or response.
+  api_mode: chat_completion # The LLM API to use. Options: chat_completion, response, or claude_code (runs the Claude Code CLI on your Claude subscription; llm.api is then unused).
   generation_kwargs:
-  # Arguments for the selected LLM API.
+  # Arguments for the selected LLM API. With claude_code only model is used.
     max_tokens: 16384
-    model: ???
+    model: ??? # With claude_code, a Claude model alias or full name. Example: opus
+  claude_code:
+  # Options for api_mode claude_code.
+    cli_path: claude # Path to the claude executable. Example: claude
+    fallback_model: null # Model to fall back to if the main one is overloaded or unavailable. Example: sonnet
+    effort: null # Effort level passed to claude. Example: low
+    timeout: 600 # Timeout in seconds for one claude call. Example: 600
   language: English # Preferred language for the TL;DR. Example: English
 
 reranker:
+  time_decay: true # Whether to weight recently added Zotero papers higher. false weights all Zotero papers equally. Example: false
   local:
     model: jinaai/jina-embeddings-v5-text-nano-retrieval # The Hugging Face model name of the local embedding model. Example: jinaai/jina-embeddings-v5-text-nano
     encode_kwargs:

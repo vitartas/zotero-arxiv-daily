@@ -9,11 +9,14 @@ class BaseReranker(ABC):
 
     def rerank(self, candidates:list[Paper], corpus:list[CorpusPaper]) -> list[Paper]:
         corpus = sorted(corpus,key=lambda x: x.added_date,reverse=True)
-        time_decay_weight = 1 / (1 + np.log10(np.arange(len(corpus)) + 1))
-        time_decay_weight: np.ndarray = time_decay_weight / time_decay_weight.sum()
+        if self.config.reranker.get("time_decay", True):
+            corpus_weight = 1 / (1 + np.log10(np.arange(len(corpus)) + 1))
+        else:
+            corpus_weight = np.ones(len(corpus))
+        corpus_weight: np.ndarray = corpus_weight / corpus_weight.sum()
         sim = self.get_similarity_score([c.abstract for c in candidates], [c.abstract for c in corpus])
         assert sim.shape == (len(candidates), len(corpus))
-        scores = (sim * time_decay_weight).sum(axis=1) * 10 # [n_candidate]
+        scores = (sim * corpus_weight).sum(axis=1) * 10 # [n_candidate]
         for s,c in zip(scores,candidates):
             c.score = s
         candidates = sorted(candidates,key=lambda x: x.score,reverse=True)

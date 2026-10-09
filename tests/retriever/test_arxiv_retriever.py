@@ -1,11 +1,13 @@
 """Tests for ArxivRetriever."""
 
 import time
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import feedparser
 
-from zotero_arxiv_daily.retriever.arxiv_retriever import ArxivRetriever, _run_with_hard_timeout
+from tests.canned_responses import make_sample_paper
+from zotero_arxiv_daily.retriever.arxiv_retriever import ArxivRetriever, _run_with_hard_timeout, _submission_window
 import zotero_arxiv_daily.retriever.arxiv_retriever as arxiv_retriever
 
 
@@ -19,7 +21,6 @@ def _raise_runtime_error() -> None:
 
 
 def test_arxiv_retriever(config, mock_feedparser, monkeypatch):
-    monkeypatch.setattr("zotero_arxiv_daily.retriever.base.sleep", lambda _: None)
 
     # The RSS fixture gives us paper IDs.  After feedparser, the code calls
     # arxiv.Client().results(search) which makes real HTTP requests.  We mock
@@ -51,16 +52,132 @@ def test_arxiv_retriever(config, mock_feedparser, monkeypatch):
 
     monkeypatch.setattr(arxiv_retriever.arxiv, "Client", FakeClient)
 
-    # Skip file downloads in convert_to_paper
-    monkeypatch.setattr(arxiv_retriever, "extract_text_from_html", lambda paper: None)
-    monkeypatch.setattr(arxiv_retriever, "extract_text_from_pdf", lambda paper: None)
-    monkeypatch.setattr(arxiv_retriever, "extract_text_from_tar", lambda paper: None)
+    # Full text is only fetched after reranking, never while retrieving
+    def _no_download(paper):
+        raise AssertionError("retrieve_papers must not download full text")
+
+    monkeypatch.setattr(arxiv_retriever, "extract_text_from_html", _no_download)
+    monkeypatch.setattr(arxiv_retriever, "extract_text_from_pdf", _no_download)
+    monkeypatch.setattr(arxiv_retriever, "extract_text_from_tar", _no_download)
 
     retriever = ArxivRetriever(config)
     papers = retriever.retrieve_papers()
 
     assert len(papers) == len(new_entries)
     assert set(p.title for p in papers) == set(e.title for e in new_entries)
+    assert all(p.full_text is None for p in papers)
+
+
+def test_fetch_full_text_falls_back_tar_html_pdf(config, monkeypatch):
+    monkeypatch.setattr(arxiv_retriever, "sleep", lambda _: None)
+    tried = []
+
+    def _extractor(name, result):
+        def _extract(paper):
+            tried.append(name)
+            return result
+        return _extract
+
+    monkeypatch.setattr(arxiv_retriever, "extract_text_from_tar", _extractor("tar", None))
+    monkeypatch.setattr(arxiv_retriever, "extract_text_from_html", _extractor("html", None))
+    monkeypatch.setattr(arxiv_retriever, "extract_text_from_pdf", _extractor("pdf", "PDF text"))
+    paper = make_sample_paper(full_text=None)
+
+    ArxivRetriever(config).fetch_full_text(paper)
+
+    assert tried == ["tar", "html", "pdf"]
+    assert paper.full_text == "PDF text"
+
+
+def test_fetch_full_text_stops_at_first_success(config, monkeypatch):
+    monkeypatch.setattr(arxiv_retriever, "sleep", lambda _: None)
+    monkeypatch.setattr(arxiv_retriever, "extract_text_from_tar", lambda paper: "TeX source")
+    monkeypatch.setattr(arxiv_retriever, "extract_text_from_html", lambda paper: 1 / 0)
+    monkeypatch.setattr(arxiv_retriever, "extract_text_from_pdf", lambda paper: 1 / 0)
+    paper = make_sample_paper(full_text=None)
+
+    ArxivRetriever(config).fetch_full_text(paper)
+
+    assert paper.full_text == "TeX source"
+
+
+def test_extract_text_from_tar_uses_source_url(monkeypatch):
+    calls = []
+    monkeypatch.setattr(arxiv_retriever, "_run_with_hard_timeout", lambda func, args, **kw: calls.append(args) or "tex")
+    paper = make_sample_paper(url="https://arxiv.org/abs/2610.00001", pdf_url="https://arxiv.org/pdf/2610.00001")
+
+    assert arxiv_retriever.extract_text_from_tar(paper) == "tex"
+    assert calls == [("https://arxiv.org/src/2610.00001", paper.url, paper.title)]
+
+
+# ---------------------------------------------------------------------------
+# Date-window mode (lookback_days): arXiv API instead of RSS
+# ---------------------------------------------------------------------------
+
+
+def test_submission_window_saturday_run():
+    # A Saturday run with lag 2 covers first submissions from the previous Thursday up to this Thursday.
+    start, end = _submission_window(date(2026, 10, 10), lookback_days=7, lag_days=2)
+    assert start == datetime(2026, 10, 1, tzinfo=timezone.utc)
+    assert end == datetime(2026, 10, 8, tzinfo=timezone.utc)
+
+
+def test_submission_windows_of_consecutive_runs_are_contiguous():
+    _, end_previous = _submission_window(date(2026, 10, 3), lookback_days=7, lag_days=2)
+    start_next, _ = _submission_window(date(2026, 10, 10), lookback_days=7, lag_days=2)
+    assert end_previous == start_next
+
+
+def _fake_api_result(paper_id: str, primary_category: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        entry_id=f"http://arxiv.org/abs/{paper_id}v1",
+        title=f"Paper {paper_id}",
+        authors=[SimpleNamespace(name="Test Author")],
+        summary="Test abstract",
+        pdf_url=f"http://arxiv.org/pdf/{paper_id}v1",
+        primary_category=primary_category,
+    )
+
+
+def _install_fake_api(monkeypatch, results_by_category):
+    searches = []
+
+    class FakeClient:
+        def __init__(self, **kw):
+            pass
+
+        def results(self, search):
+            searches.append(search)
+            category = search.query.removeprefix("cat:").split(" ")[0]
+            outcome = results_by_category[category]
+            if isinstance(outcome, Exception):
+                raise outcome
+            return iter(outcome)
+
+    monkeypatch.setattr(arxiv_retriever.arxiv, "Client", FakeClient)
+    return searches
+
+
+def test_api_mode_queries_each_category_in_window(config, monkeypatch):
+    config.source.arxiv.lookback_days = 7
+    config.source.arxiv.lag_days = 2
+    searches = _install_fake_api(monkeypatch, {
+        "cs.AI": [_fake_api_result("2610.00001", "cs.AI"), _fake_api_result("2610.00002", "cs.CV")],
+        "cs.CV": [_fake_api_result("2610.00002", "cs.CV"), _fake_api_result("2610.00003", "cs.CV")],
+    })
+
+    raw = ArxivRetriever(config)._retrieve_raw_papers()
+
+    start, end = _submission_window(datetime.now(timezone.utc).date(), 7, 2)
+    window = f"submittedDate:[{start:%Y%m%d}0000 TO {end - timedelta(days=1):%Y%m%d}2359]"
+    assert [s.query for s in searches] == [f"cat:cs.AI AND {window}", f"cat:cs.CV AND {window}"]
+    assert all(s.max_results is None for s in searches)
+    # Deduplicated across categories
+    assert [r.entry_id for r in raw] == [
+        "http://arxiv.org/abs/2610.00001v1",
+        "http://arxiv.org/abs/2610.00002v1",
+        "http://arxiv.org/abs/2610.00003v1",
+    ]
 
 
 def test_run_with_hard_timeout_returns_value():
@@ -252,3 +369,56 @@ def test_retrieve_raw_papers_retries_on_http_failure(config, mock_feedparser, mo
     assert len(calls) == 2
     assert len(raw) > 0
 
+
+
+def test_api_mode_filters_cross_lists_unless_enabled(config, monkeypatch):
+    config.source.arxiv.lookback_days = 7
+    results = {
+        "cs.AI": [_fake_api_result("2610.00001", "cs.AI"), _fake_api_result("2610.00004", "stat.ML")],
+        "cs.CV": [],
+    }
+    _install_fake_api(monkeypatch, results)
+    assert [r.primary_category for r in ArxivRetriever(config)._retrieve_raw_papers()] == ["cs.AI"]
+
+    config.source.arxiv.include_cross_list = True
+    _install_fake_api(monkeypatch, results)
+    assert [r.primary_category for r in ArxivRetriever(config)._retrieve_raw_papers()] == ["cs.AI", "stat.ML"]
+
+
+def test_api_mode_keeps_other_categories_when_one_fails(config, monkeypatch):
+    config.source.arxiv.lookback_days = 7
+
+    def _partial_then_fail():
+        yield _fake_api_result("2610.00001", "cs.AI")
+        raise RuntimeError("arXiv API returned an unexpectedly empty page")
+
+    _install_fake_api(monkeypatch, {
+        "cs.AI": _partial_then_fail(),
+        "cs.CV": [_fake_api_result("2610.00003", "cs.CV")],
+    })
+
+    raw = ArxivRetriever(config)._retrieve_raw_papers()
+
+    assert [r.entry_id for r in raw] == ["http://arxiv.org/abs/2610.00001v1", "http://arxiv.org/abs/2610.00003v1"]
+
+
+def test_api_mode_debug_limits_results(config, monkeypatch):
+    config.source.arxiv.lookback_days = 7
+    config.executor.debug = True
+    searches = _install_fake_api(monkeypatch, {
+        "cs.AI": [_fake_api_result(f"2610.{i:05d}", "cs.AI") for i in range(8)],
+        "cs.CV": [_fake_api_result(f"2610.{i:05d}", "cs.CV") for i in range(100, 108)],
+    })
+
+    raw = ArxivRetriever(config)._retrieve_raw_papers()
+
+    assert all(s.max_results == 10 for s in searches)
+    assert len(raw) == 10
+
+
+def test_api_mode_not_used_without_lookback(config, mock_feedparser, monkeypatch):
+    def _no_api(**kw):
+        raise AssertionError("RSS mode must not query the arXiv API")
+
+    monkeypatch.setattr(arxiv_retriever.arxiv, "Client", _no_api)
+    assert len(ArxivRetriever(config)._retrieve_raw_papers()) > 0

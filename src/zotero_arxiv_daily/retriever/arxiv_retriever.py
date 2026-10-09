@@ -4,7 +4,7 @@ from arxiv import Result as ArxivResult
 from ..protocol import Paper
 from ..utils import extract_markdown_from_pdf, extract_tex_code_from_tar
 import calendar
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import multiprocessing
 import os
 from queue import Empty
@@ -207,6 +207,16 @@ def _entry_to_arxiv_result(entry: Any) -> ArxivResult:
     )
 
 
+def _submission_window(today: date, lookback_days: int, lag_days: int) -> tuple[datetime, datetime]:
+    """Return the [start, end) UTC window of first-submission times covered by a run on *today*.
+
+    The window ends lag_days before today, so every paper submitted in it has been announced by the time
+    of the run, and consecutive runs lookback_days apart cover contiguous windows.
+    """
+    end = datetime(today.year, today.month, today.day, tzinfo=timezone.utc) - timedelta(days=lag_days)
+    return end - timedelta(days=lookback_days), end
+
+
 @register_retriever("arxiv")
 class ArxivRetriever(BaseRetriever):
     def __init__(self, config):
@@ -215,6 +225,42 @@ class ArxivRetriever(BaseRetriever):
             raise ValueError("category must be specified for arxiv.")
 
     def _retrieve_raw_papers(self) -> list[ArxivResult]:
+        lookback_days = self.retriever_config.get("lookback_days", None)
+        if lookback_days:
+            return self._retrieve_raw_papers_from_api(lookback_days)
+        return self._retrieve_raw_papers_from_rss()
+
+    def _retrieve_raw_papers_from_api(self, lookback_days: int) -> list[ArxivResult]:
+        categories = list(self.config.source.arxiv.category)
+        include_cross_list = self.retriever_config.get("include_cross_list", False)
+        lag_days = self.retriever_config.get("lag_days", 2)
+        start, end = _submission_window(datetime.now(timezone.utc).date(), lookback_days, lag_days)
+        last_minute = end - timedelta(minutes=1)
+        logger.info(f"Querying arXiv API for papers first submitted between {start:%Y-%m-%d %H:%M} and {last_minute:%Y-%m-%d %H:%M} UTC")
+
+        client = arxiv.Client(page_size=500, delay_seconds=3, num_retries=5)
+        raw_papers: dict[str, ArxivResult] = {}
+        for category in categories:
+            search = arxiv.Search(
+                query=f"cat:{category} AND submittedDate:[{start:%Y%m%d%H%M} TO {last_minute:%Y%m%d%H%M}]",
+                max_results=10 if self.config.executor.debug else None,
+                sort_by=arxiv.SortCriterion.SubmittedDate,
+            )
+            # Keep whatever was fetched if arXiv fails midway, rather than losing the whole digest.
+            try:
+                for result in client.results(search):
+                    if not include_cross_list and result.primary_category not in categories:
+                        continue
+                    raw_papers.setdefault(result.entry_id, result)
+            except Exception as exc:
+                logger.warning(f"Failed to fully retrieve arxiv papers in {category}: {exc}")
+
+        raw_papers = list(raw_papers.values())
+        if self.config.executor.debug:
+            raw_papers = raw_papers[:10]
+        return raw_papers
+
+    def _retrieve_raw_papers_from_rss(self) -> list[ArxivResult]:
         query = '+'.join(self.config.source.arxiv.category)
         include_cross_list = self.config.source.arxiv.get("include_cross_list", False)
         rss_url = f"https://rss.arxiv.org/atom/{query}"
@@ -278,28 +324,27 @@ class ArxivRetriever(BaseRetriever):
         return raw_papers
 
     def convert_to_paper(self, raw_paper: ArxivResult) -> Paper:
-        title = raw_paper.title
-        authors = [a.name for a in raw_paper.authors]
-        abstract = raw_paper.summary
-        pdf_url = raw_paper.pdf_url
-        full_text = extract_text_from_tar(raw_paper)
-        if full_text is None:
-            full_text = extract_text_from_html(raw_paper)
-        if full_text is None:
-            full_text = extract_text_from_pdf(raw_paper)
         return Paper(
             source=self.name,
-            title=title,
-            authors=authors,
-            abstract=abstract,
+            title=raw_paper.title,
+            authors=[a.name for a in raw_paper.authors],
+            abstract=raw_paper.summary,
             url=raw_paper.entry_id,
-            pdf_url=pdf_url,
-            full_text=full_text,
+            pdf_url=raw_paper.pdf_url,
         )
 
+    def fetch_full_text(self, paper: Paper) -> None:
+        full_text = extract_text_from_tar(paper)
+        if full_text is None:
+            full_text = extract_text_from_html(paper)
+        if full_text is None:
+            full_text = extract_text_from_pdf(paper)
+        paper.full_text = full_text
+        sleep(1)
 
-def extract_text_from_html(paper: ArxivResult) -> str | None:
-    html_url = paper.entry_id.replace("/abs/", "/html/")
+
+def extract_text_from_html(paper: Paper) -> str | None:
+    html_url = paper.url.replace("/abs/", "/html/")
     try:
         return _extract_text_from_html_worker(html_url)
     except Exception as exc:
@@ -307,7 +352,7 @@ def extract_text_from_html(paper: ArxivResult) -> str | None:
         return None
 
 
-def extract_text_from_pdf(paper: ArxivResult) -> str | None:
+def extract_text_from_pdf(paper: Paper) -> str | None:
     if paper.pdf_url is None:
         logger.warning(f"No PDF URL available for {paper.title}")
         return None
@@ -320,14 +365,14 @@ def extract_text_from_pdf(paper: ArxivResult) -> str | None:
     )
 
 
-def extract_text_from_tar(paper: ArxivResult) -> str | None:
-    source_url = paper.source_url()
-    if source_url is None:
+def extract_text_from_tar(paper: Paper) -> str | None:
+    if paper.pdf_url is None:
         logger.warning(f"No source URL available for {paper.title}")
         return None
+    source_url = paper.pdf_url.replace("/pdf/", "/src/")
     return _run_with_hard_timeout(
         _extract_text_from_tar_worker,
-        (source_url, paper.entry_id, paper.title),
+        (source_url, paper.url, paper.title),
         timeout=TAR_EXTRACT_TIMEOUT,
         operation="Tar extraction",
         paper_title=paper.title,

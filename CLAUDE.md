@@ -33,9 +33,9 @@ The app follows a linear pipeline orchestrated by `Executor` (`src/zotero_arxiv_
 
 1. **Fetch Zotero corpus** — retrieves user's library papers via pyzotero API
 2. **Filter corpus** — applies `include_path` glob patterns to select relevant collections
-3. **Retrieve new papers** — fetches from configured sources (arXiv RSS, bioRxiv/medRxiv REST API, chemRxiv via Crossref REST API)
-4. **Rerank** — scores candidates by weighted similarity to corpus (newer Zotero papers weighted higher)
-5. **Generate TLDRs + affiliations** — via OpenAI-compatible LLM API
+3. **Retrieve new papers** — fetches metadata from configured sources (arXiv RSS or API date window, bioRxiv/medRxiv REST API, chemRxiv via Crossref REST API)
+4. **Rerank** — scores candidates by weighted similarity to corpus (newer Zotero papers weighted higher unless `reranker.time_decay: false`)
+5. **Fetch full text + generate TLDRs + affiliations** — for the top papers only, via OpenAI-compatible LLM API or Claude Code CLI
 6. **Render + send email** — HTML email via SMTP
 
 ### Plugin Systems
@@ -50,7 +50,9 @@ Uses Hydra + OmegaConf. Config is composed from `config/base.yaml` (defaults) + 
 
 ### Data Classes
 
-`Paper` and `CorpusPaper` in `src/zotero_arxiv_daily/protocol.py`. `Paper` has LLM-powered methods (`generate_tldr`, `generate_affiliations`) that call the OpenAI API directly.
+`Paper` and `CorpusPaper` in `src/zotero_arxiv_daily/protocol.py`. `Paper` has LLM-powered methods (`generate_tldr`, `generate_affiliations`) that go through `_request_llm`: the OpenAI API (`api_mode` `chat_completion`/`response`) or the Claude Code CLI `claude -p` on the user's Claude subscription (`api_mode: claude_code`).
+
+Retrievers only fetch metadata; full text is downloaded via `BaseRetriever.fetch_full_text` after reranking, for the top `max_paper_num` papers only. With `source.arxiv.lookback_days` set, arXiv papers come from the arXiv API for a submission-date window instead of the RSS feed (used for the weekly digest).
 
 ## Testing
 

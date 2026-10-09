@@ -6,22 +6,31 @@ zotero:
 email:
   sender: ${oc.env:SENDER}
   receiver: ${oc.env:RECEIVER}
-  smtp_server: smtp.qq.com
-  smtp_port: 465
+  smtp_server: smtp.gmail.com
+  smtp_port: 587
   sender_password: ${oc.env:SENDER_PASSWORD}
+  subject: Weekly arXiv digest
 
 llm:
-  api:
-    key: ${oc.env:OPENAI_API_KEY}
-    base_url: ${oc.env:OPENAI_API_BASE}
-  api_mode: chat_completion
+  api_mode: claude_code # Summaries via the Claude Code CLI on the Claude subscription (CLAUDE_CODE_OAUTH_TOKEN in CI)
   generation_kwargs:
-    model: gpt-4o-mini
+    model: opus
+  claude_code:
+    fallback_model: sonnet
 
 source:
   arxiv:
-    category: ["cs.AI","cs.CV","cs.LG","cs.CL"]
+    category: ["physics.chem-ph", "cond-mat.mtrl-sci", "physics.comp-ph", "cs.LG"]
+    include_cross_list: true
+    lookback_days: 7 # Weekly digest: papers first submitted in a 7-day window...
+    lag_days: 2 # ...ending 2 days before the (Saturday) run
+  chemrxiv:
+    lookback_hours: 168
+
+reranker:
+  time_decay: false # Weight all Zotero papers equally, regardless of when they were added
 
 executor:
   debug: ${oc.env:DEBUG,null}
-  source: ['arxiv']
+  source: ['arxiv', 'chemrxiv']
+  max_paper_num: 15
