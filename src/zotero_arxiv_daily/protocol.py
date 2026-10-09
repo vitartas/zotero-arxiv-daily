@@ -11,6 +11,9 @@ import subprocess
 from tempfile import TemporaryDirectory
 RawPaperItem = TypeVar('RawPaperItem')
 
+# A leading "TLDR:" / "**TL;DR:**" label added by the model; the email template already labels the TLDR.
+_TLDR_LABEL = re.compile(r"^\s*(?:\*\*|__)?\s*TL;?\s?DR\s*(?:\*\*|__)?\s*[:\-–—]?\s*(?:\*\*|__)?\s*", flags=re.IGNORECASE)
+
 
 def _request_claude_code(llm_params: dict, messages: list[dict]) -> str:
     """Query Claude through the Claude Code CLI (`claude -p`), billed to the logged-in Claude subscription.
@@ -133,12 +136,12 @@ class Paper:
             [
                 {
                     "role": "system",
-                    "content": f"You are an assistant who perfectly summarizes scientific paper, and gives the core idea of the paper to the user. Your answer should be in {lang}.",
+                    "content": f"You are an assistant who perfectly summarizes scientific paper, and gives the core idea of the paper to the user. Your answer should be in {lang}. Reply with the summary only, as plain text: no title, label or markdown.",
                 },
                 {"role": "user", "content": prompt},
             ],
         )
-        return tldr
+        return _TLDR_LABEL.sub("", tldr, count=1).strip()
     
     def generate_tldr(self, openai_client:OpenAI,llm_params:dict) -> str:
         try:

@@ -232,3 +232,30 @@ def test_claude_code_non_json_output_falls_back_to_abstract(claude_code_params, 
     )
     paper = make_sample_paper()
     assert paper.generate_tldr(None, claude_code_params) == paper.abstract
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "**TLDR:** The paper does X.",
+        "TLDR: The paper does X.",
+        "**TL;DR**: The paper does X.",
+        "TL;DR - The paper does X.",
+        "  tldr:The paper does X.\n",
+        "The paper does X.",
+    ],
+)
+def test_tldr_strips_leading_label(claude_code_params, monkeypatch, raw):
+    import json
+
+    output = json.dumps({"type": "result", "is_error": False, "result": raw})
+    monkeypatch.setattr("zotero_arxiv_daily.protocol.subprocess.run", _stub_claude_run([], stdout=output))
+    assert make_sample_paper().generate_tldr(None, claude_code_params) == "The paper does X."
+
+
+def test_tldr_keeps_tldr_inside_text(claude_code_params, monkeypatch):
+    import json
+
+    output = json.dumps({"type": "result", "is_error": False, "result": "A TLDR: style summary benchmark is proposed."})
+    monkeypatch.setattr("zotero_arxiv_daily.protocol.subprocess.run", _stub_claude_run([], stdout=output))
+    assert make_sample_paper().generate_tldr(None, claude_code_params) == "A TLDR: style summary benchmark is proposed."
