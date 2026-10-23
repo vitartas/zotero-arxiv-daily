@@ -23,7 +23,7 @@ source:
     category: ["physics.chem-ph", "cond-mat.mtrl-sci", "physics.comp-ph", "cs.LG"]
     include_cross_list: true
     lookback_days: 7 # Weekly digest: papers first submitted in a 7-day window...
-    lag_days: 2 # ...ending 2 days before the (Saturday) run
+    lag_days: 3 # ...ending 3 days before the (Sunday) run
   chemrxiv:
     lookback_hours: 168
 

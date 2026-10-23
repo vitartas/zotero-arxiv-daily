@@ -2,9 +2,9 @@ name: Send emails weekly
 on:
   workflow_dispatch:
   schedule:
-    # Saturday 06:17 UTC (off the top of the hour, when GitHub delays or drops scheduled runs most).
-    # With source.arxiv.lag_days: 2 this covers papers first submitted Thursday to Thursday.
-    - cron: '17 6 * * 6'
+    # Sunday 06:17 UTC (off the top of the hour, when GitHub delays or drops scheduled runs most).
+    # With source.arxiv.lag_days: 3 this covers papers first submitted Thursday to Thursday.
+    - cron: '17 6 * * 0'
 
 jobs:
   calculate-and-send:

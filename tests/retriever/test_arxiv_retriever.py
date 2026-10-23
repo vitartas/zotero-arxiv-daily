@@ -122,6 +122,13 @@ def test_submission_window_saturday_run():
     assert end == datetime(2026, 10, 8, tzinfo=timezone.utc)
 
 
+def test_submission_window_sunday_run():
+    # A Sunday run with lag 3 covers the same Thursday-to-Thursday window as a Saturday run with lag 2.
+    start, end = _submission_window(date(2026, 10, 11), lookback_days=7, lag_days=3)
+    assert start == datetime(2026, 10, 1, tzinfo=timezone.utc)
+    assert end == datetime(2026, 10, 8, tzinfo=timezone.utc)
+
+
 def test_submission_windows_of_consecutive_runs_are_contiguous():
     _, end_previous = _submission_window(date(2026, 10, 3), lookback_days=7, lag_days=2)
     start_next, _ = _submission_window(date(2026, 10, 10), lookback_days=7, lag_days=2)

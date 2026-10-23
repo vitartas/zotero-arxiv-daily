@@ -119,7 +119,7 @@ source:
     category: null # The categories of target arxiv papers. Find the abbr of your research area from [here](https://arxiv.org/category_taxonomy). Example: ["cs.AI","cs.CV","cs.LG","cs.CL"]
     include_cross_list: false # Whether to include arXiv cross-list papers in subscribed categories. Example: true
     lookback_days: null # null: take the latest daily announcement from the RSS feed. N: query the arXiv API for papers first submitted in an N-day window instead (e.g. 7 for a weekly digest). Example: 7
-    lag_days: 2 # Only used with lookback_days. The window ends lag_days before the run date, so every paper in it has been announced already. 2 suits a weekly run on Saturday. Example: 2
+    lag_days: 2 # Only used with lookback_days. The window ends lag_days before the run date, so every paper in it has been announced already. 2 suits a weekly run on Saturday, 3 on Sunday. Example: 2
   biorxiv:
     category: null # The categories of target biorxiv papers. Find categories from [here](https://www.biorxiv.org/). Example: ["biochemistry","animal behavior and cognition"]
   medrxiv:
