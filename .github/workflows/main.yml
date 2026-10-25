@@ -2,9 +2,12 @@ name: Send emails weekly
 on:
   workflow_dispatch:
   schedule:
-    # Sunday 06:17 UTC (off the top of the hour, when GitHub delays or drops scheduled runs most).
-    # With source.arxiv.lag_days: 3 this covers papers first submitted Thursday to Thursday.
-    - cron: '17 6 * * 0'
+    # Sunday 01:17 UTC, overnight Saturday to Sunday, so the email lands by Sunday morning even when
+    # GitHub starts the run hours late. Off the top of the hour and after the midnight-UTC rush, when
+    # GitHub delays or drops scheduled runs most. Keep it on Sunday UTC: the arXiv window is computed
+    # from the UTC run date, and with source.arxiv.lag_days: 3 it covers papers first submitted
+    # Thursday to Thursday.
+    - cron: '17 1 * * 0'
 
 jobs:
   calculate-and-send:
